@@ -19,7 +19,7 @@ class RedisCache(object):
 		self.__iters__ = {}
 		uri = urlparse(uri)
 		host, port= uri.netloc.split(":")
-		db = re.findall("\d+", uri.path)[0]
+		db = re.findall(r"\d+", uri.path)[0]
 		self.cache = redis.Redis(host=host, port=port, db=db)
 
 
@@ -59,11 +59,11 @@ class RedisCache(object):
 			self.push(k, v)
 
 
-class Worker(object):
+class App(object):
 
 	class Meta(object):
 		def __init__(self, d):
-			Meta = Worker.Meta
+			Meta = App.Meta
 			for k, v in d.items():
 				if isinstance(v, (list, tuple)):
 					setattr(self, k, [Meta(i) if isinstance(i, (dict)) else i for i in v])
@@ -92,6 +92,8 @@ class Worker(object):
 				try:
 					await self.target(*args)
 					# import pdb; pdb.set_trace()
+				except KeyboardInterrupt:
+					import sys; sys.exit()
 				except Exception as e:
 					print("Woker.Coro.run:", "target:", self.name, ",", e)
 				self.count -= 1
@@ -108,15 +110,16 @@ class Worker(object):
 		self.__coroutines__ = []
 		self.closing = False
 		self.cache = RedisCache(id, uri=cache_uri, persist=cache_persist)
+		# self.loop = get_event_loop() if not loop else loop
 		self.executor = executor
 
 
-	def init(self, func):
+	def init(self, func=None):
 		async def __meta__():
-			results = await func()
+			results = (await func()) if func else {}
 			if not results: results = {}
-			meta = Worker.Meta(results)
-			meta.loop = get_event_loop()
+			meta = App.Meta(results)
+			# meta.loop = self.loop
 			# self.loop.set_default_executor(self.executor)
 			return meta
 		self.__meta__ = __meta__
@@ -137,7 +140,7 @@ class Worker(object):
 	def boot(self, func=None, interval=500000):
 		def wrap(func):
 			__begin__ = self.unit(func)
-			co = Worker.Coro(target=__begin__, name=func.__name__, args=False, parallel=1, batch=1, src=None, interval=interval)
+			co = App.Coro(target=__begin__, name=func.__name__, args=False, parallel=1, batch=1, src=None, interval=interval)
 			self.__boot__.append(co)
 			return co
 		if not func: return wrap
@@ -147,7 +150,7 @@ class Worker(object):
 	def on(self, src, parallel=1, batch=1, interval=3000):
 		def wrap(func):
 			__on__ = self.unit(func)
-			co = Worker.Coro(target=__on__, name=func.__name__, args=True, parallel=parallel, batch=batch, src=src, interval=interval)
+			co = App.Coro(target=__on__, name=func.__name__, args=True, parallel=parallel, batch=batch, src=src, interval=interval)
 			self.__coroutines__.append(co)
 			return co
 		return wrap
@@ -184,6 +187,7 @@ class Worker(object):
 	def __call__(self, boot=True, forever=False):
 		async def __run__(self, boot, forever):
 			meta = await self.__meta__()
+			meta.loop = get_event_loop()	# get the event loop which we are running inside it.
 			if boot:
 				for b in self.__boot__: self.t(b, meta, forever)
 			__closing__ = __closed__ = False
